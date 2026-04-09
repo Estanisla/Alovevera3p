@@ -1,3 +1,4 @@
+mod calculo;
 mod gui;
 
 use eframe::egui;

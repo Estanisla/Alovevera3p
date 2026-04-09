@@ -11,3 +11,10 @@ pub fn calcular_histograma(img: &image::GrayImage) -> [u32; 256] {
     }
     hist
 }
+
+pub fn calcular_histograma_procesada(img: &image::GrayImage) -> [u32; 256] {
+    // El procesado aún no está implementado, por lo que devolvemos el mismo histograma
+    // como marcador de posición. En el futuro, esta función debe calcular el histograma
+    // de la imagen renderizada/procesada.
+    calcular_histograma(img)
+}
