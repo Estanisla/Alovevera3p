@@ -1,10 +1,14 @@
-use crate::calculo::{calcular_histograma, calcular_histograma_procesada};
+use crate::calculo::{calcular_histograma, convertir_a_escala_de_grises, es_escala_de_grises, procesar_imagen, Operacion};
 use eframe::egui::{CentralPanel, SidePanel, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, TopBottomPanel, ColorImage, TextureOptions, Vec2};
-use image::{DynamicImage, ColorType};
+use image::DynamicImage;
 use rfd;
 
 pub struct MyApp {
     pub image: Option<DynamicImage>,
+    pub color_image: Option<DynamicImage>,
+    pub processed_image: Option<image::GrayImage>,
+    pub processed_histogram: Option<[u32; 256]>,
+    pub operacion: Option<Operacion>,
     pub error_message: Option<String>,
 }
 
@@ -12,6 +16,10 @@ impl Default for MyApp {
     fn default() -> Self {
         Self {
             image: None,
+            color_image: None,
+            processed_image: None,
+            processed_histogram: None,
+            operacion: None,
             error_message: None,
         }
     }
@@ -55,7 +63,9 @@ fn mostrar_resumen_histograma(ui: &mut eframe::egui::Ui, hist: &[u32; 256]) {
 }
 
 fn mostrar_histograma(ui: &mut eframe::egui::Ui, hist: &[u32; 256]) {
-    let desired_size = Vec2::new(500.0, 180.0);
+    let available_width = ui.available_width();
+    let desired_width = available_width.min(600.0);
+    let desired_size = Vec2::new(desired_width, 120.0);
     let (rect, _response) = ui.allocate_exact_size(desired_size, Sense::hover());
     let painter = ui.painter();
     let max_value = hist.iter().copied().max().unwrap_or(1) as f32;
@@ -106,12 +116,17 @@ impl eframe::App for MyApp {
                     match image::ImageReader::open(&path) {
                         Ok(reader) => match reader.decode() {
                             Ok(img) => {
-                                if matches!(img.color(), ColorType::L8 | ColorType::La8) {
+                                if es_escala_de_grises(&img) {
                                     self.image = Some(img);
+                                    self.color_image = None;
+                                    self.processed_image = None;
+                                    self.processed_histogram = None;
+                                    self.operacion = None;
                                     self.error_message = None;
                                 } else {
+                                    self.color_image = Some(img);
                                     self.image = None;
-                                    self.error_message = Some("La imagen debe estar en escala de grises. Por favor, sube otra imagen.".to_string());
+                                    self.error_message = Some("Imagen a color detectada. Haz clic en 'Convertir a Escala de Grises' para usarla.".to_string());
                                 }
                             },
                             Err(_) => {
@@ -123,6 +138,45 @@ impl eframe::App for MyApp {
                         }
                     }
                 }
+            }
+
+            if self.color_image.is_some() && ui.button("Convertir a Escala de Grises").clicked() {
+                if let Some(color_img) = &self.color_image {
+                    let gray_img = convertir_a_escala_de_grises(color_img);
+                    self.image = Some(DynamicImage::ImageLuma8(gray_img));
+                    self.color_image = None;
+                    self.processed_image = None;
+                    self.processed_histogram = None;
+                    self.operacion = None;
+                    self.error_message = None;
+                }
+            }
+
+            ui.separator();
+            ui.heading("Procesamiento");
+
+            if ui.button("Expansión").clicked() {
+                if let Some(img) = &self.image {
+                    let gray = img.to_luma8();
+                    self.processed_image = Some(procesar_imagen(&gray, Operacion::Expansion));
+                    self.processed_histogram = self.processed_image.as_ref().map(|p| calcular_histograma(p));
+                    self.operacion = Some(Operacion::Expansion);
+                }
+            }
+
+            if ui.button("Ecualización").clicked() {
+                if let Some(img) = &self.image {
+                    let gray = img.to_luma8();
+                    self.processed_image = Some(procesar_imagen(&gray, Operacion::Ecualizacion));
+                    self.processed_histogram = self.processed_image.as_ref().map(|p| calcular_histograma(p));
+                    self.operacion = Some(Operacion::Ecualizacion);
+                }
+            }
+
+            if ui.button("Limpiar").clicked() {
+                self.processed_image = None;
+                self.processed_histogram = None;
+                self.operacion = None;
             }
         });
 
@@ -145,12 +199,12 @@ impl eframe::App for MyApp {
                         }
                     });
 
-                    // Recuadro para imagen procesada (por ahora la misma)
+                    // Recuadro para imagen procesada
                     ui.group(|ui| {
                         ui.label("Imagen Procesada");
-                        if let Some(img) = &self.image {
-                            let size = [img.width() as usize, img.height() as usize];
-                            let color_image = ColorImage::from_rgba_unmultiplied(size, &img.to_rgba8());
+                        if let Some(processed) = &self.processed_image {
+                            let size = [processed.width() as usize, processed.height() as usize];
+                            let color_image = ColorImage::from_rgba_unmultiplied(size, &image::DynamicImage::ImageLuma8(processed.clone()).to_rgba8());
                             let texture = ctx.load_texture("processed_image", color_image, TextureOptions::default());
                             ui.image((texture.id(), Vec2::new(500.0, 500.0)));
                         } else {
@@ -161,21 +215,26 @@ impl eframe::App for MyApp {
 
                 if let Some(img) = &self.image {
                     let hist = calcular_histograma(&img.to_luma8());
-                    let processed_hist = calcular_histograma_procesada(&img.to_luma8());
 
                     ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        ui.group(|ui| {
+                    ui.columns(2, |columns| {
+                        columns[0].group(|ui| {
                             ui.label("Histograma Imagen Original");
                             mostrar_resumen_histograma(ui, &hist);
                             mostrar_histograma(ui, &hist);
                         });
 
-                        ui.group(|ui| {
+                        columns[1].group(|ui| {
                             ui.label("Histograma Imagen Procesada");
-                            ui.colored_label(Color32::YELLOW, "Procesado no implementado. Se muestra el histograma original como marcador de posición.");
-                            mostrar_resumen_histograma(ui, &processed_hist);
-                            mostrar_histograma(ui, &processed_hist);
+                            if let Some(processed_hist) = self.processed_histogram {
+                                if let Some(op) = self.operacion {
+                                    ui.label(format!("Operación: {:?}", op));
+                                }
+                                mostrar_resumen_histograma(ui, &processed_hist);
+                                mostrar_histograma(ui, &processed_hist);
+                            } else {
+                                ui.colored_label(Color32::YELLOW, "Aplica una operación para ver el histograma procesado.");
+                            }
                         });
                     });
                 }
